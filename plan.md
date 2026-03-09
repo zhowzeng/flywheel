@@ -275,14 +275,17 @@ Expected: {
 ## 專案結構
 
 ```
-prompt-flywheel-poc/
-├── docker-compose.yml          # Redpanda
+flywheel/
+├── docker-compose.yml          # Redpanda（單節點 + Console + 自動建 topic）
 ├── pyproject.toml              # uv 套件管理 (uv add / uv run)
 ├── golden_set.json             # 5 組 test cases
 │
 ├── prompts/                    # Prompt store (本地檔案)
 │   ├── v1.prompt.md            # 初始 prompt
 │   └── current.prompt.md       # 永遠指向最新版（atomic rename 更新）
+│
+├── lib/
+│   └── prompt_manager.py       # Prompt store 讀寫模組
 │
 ├── app/
 │   └── gradio_app.py           # Gradio UI + OpenAI 呼叫
@@ -291,20 +294,19 @@ prompt-flywheel-poc/
 │   ├── evaluator.py            # Quix: app-log → feedback
 │   └── learner.py              # Quix: feedback → 寫入 prompts/
 │
-└── scripts/
-    └── setup_topics.sh         # 建立 Redpanda topics (app-log, feedback)
+└── docker-compose/             # (參考用) Redpanda 官方 quickstart 範例
 ```
 
 ---
 
 ## 實作順序
 
-### Phase 1: 基礎建設 (Day 1)
+### Phase 1: 基礎建設 (Day 1) ✅ DONE
 
-1. `docker-compose.yml` 啟動 Redpanda
-2. 建立 3 個 topics (`app-log`, `feedback`, `prompt-store`)
-3. 寫 `prompt_manager.py`，驗證能讀寫 prompt-store topic
-4. 寫 `golden_set.json`
+1. ✅ `docker-compose.yml` 啟動 Redpanda（單節點，無 SASL）
+2. ✅ 建立 2 個 topics (`app-log`, `feedback`)；prompt store 改用本地檔案，不需要 `prompt-store` topic
+3. ✅ 寫 `lib/prompt_manager.py`，讀寫 `prompts/` 目錄（read_current, save_new_version, list_versions, current_mtime）
+4. ✅ 寫 `golden_set.json`（5 組 test cases）
 
 ### Phase 2: LLM App (Day 1-2)
 

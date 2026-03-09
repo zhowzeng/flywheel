@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.python-version
+
+# uv
+.uv/
+
+# Environment
+.env
+.env.*
+
+# Prompts (generated versions, keep only v1 and current)
+prompts/v[2-9]*.prompt.md
+prompts/v[1-9][0-9]*.prompt.md
+
+# OS
+.DS_Store
+Thumbs.db
