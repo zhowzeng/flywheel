@@ -10,36 +10,76 @@ Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，fl
 
 ## 架構總覽
 
-```
-┌────────────┐      ┌──────────────┐      ┌──────────────────────┐
-│  Gradio UI │─────▶│  Redpanda    │─────▶│  Quix Streams         │
-│            │◀─ ─ ─│              │◀─────│                       │
-└────────────┘      └──────────────┘      └──────────────────────┘
-      │                    │                    │
-      │ 讀 prompt          │ Topics:            │ 兩個 processor:
-      ▼                    │  • app-log          │  1. Evaluator
-┌────────────┐             │  • feedback         │  2. Learner
-│Prompt Store│             │  • prompt-store     │
-│(compacted  │             │                     │
-│ topic)     │◀────────────┼─────────────────────┘
-└────────────┘
+```mermaid
+flowchart LR
+    User(["User"])
+    UI["Gradio UI"]
+    OAI["OpenAI API"]
+
+    subgraph Redpanda
+        AL[("app-log")]
+        FB[("feedback")]
+    end
+
+    PS[("prompts/  (本地檔案)")]
+    EV["Evaluator  (Quix)"]
+    LR["Learner  (Quix)"]
+
+    User -->|輸入對話 / 👍👎 feedback| UI
+    UI -->|讀取當前 prompt| PS
+    UI -->|呼叫 LLM| OAI
+    OAI -->|JSON 輸出| UI
+    UI -->|pub| AL
+
+    AL -->|sub| EV
+    EV -->|呼叫 LLM 產生 critique| OAI
+    EV -->|pub critique| FB
+
+    FB -->|sub，累積 5 條觸發| LR
+    LR -->|呼叫 LLM 改進 prompt| OAI
+    LR -->|寫入新版 prompt| PS
+
+    PS -.->|UI polling mtime 偵測更新| UI
 ```
 
 ### 資料流
 
-```
-1. User 在 Gradio 輸入客服對話 (或跑預設 test case)
-2. Gradio App 從 prompt-store topic 讀取當前 prompt
-3. 呼叫 OpenAI API 產生結構化 JSON
-4. 將 {input, output, expected_output, prompt_version} pub 到 app-log topic
-5. Quix Evaluator sub app-log，比對 output vs expected_output，產生評分
-6. 評分 pub 到 feedback topic
-7. Quix Learner sub feedback，累積 5 條後觸發
-8. Learner 用 OpenAI 根據失敗案例產生 candidate prompt
-9. Candidate prompt 跑 golden set eval gate
-10. 通過 → pub 到 prompt-store topic (new version)
-    不通過 → 丟棄，等下一批
-11. Gradio App 偵測到新版 prompt，UI 自動更新
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Gradio UI
+    participant OAI as OpenAI API
+    participant AL as app-log
+    participant EV as Evaluator
+    participant FB as feedback
+    participant LR as Learner
+    participant PS as prompts/ (檔案)
+
+    Note over UI,PS: 初始化：UI 讀取 prompts/current.txt
+
+    User->>UI: 輸入客服對話
+    UI->>OAI: input + current prompt
+    OAI-->>UI: 結構化 JSON 輸出
+    UI->>AL: pub {input, expected, actual, prompt_version, prompt_text}
+
+    User->>UI: 👍👎 + 可選文字說明
+    UI->>AL: pub {log_id, thumb, user_comment}
+
+    AL-->>EV: sub
+    EV->>OAI: prompt_text + input + expected + actual (+ user_comment)
+    OAI-->>EV: critique（或無法判斷）
+    alt 有具體 critique
+        EV->>FB: pub {log_id, prompt_version, prompt_text, critique}
+    else 無法判斷
+        EV->>EV: 跳過，不 pub
+    end
+
+    FB-->>LR: sub（累積 5 條後觸發）
+    LR->>OAI: current prompt + 5 條 critique → 請改進
+    OAI-->>LR: 新版 prompt
+    LR->>PS: 寫入 prompts/v{n}.txt，atomic rename 更新 current.txt
+
+    PS-->>UI: UI polling mtime，偵測到更新後自動刷新
 ```
 
 ---
@@ -50,9 +90,10 @@ Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，fl
 |-----------|------|------|
 | LLM | OpenAI API (gpt-4o-mini) | 便宜快速，POC 夠用 |
 | LLM App UI | Gradio | 展示 + 人工測試 |
-| 流處理平台 | Redpanda (Docker) | 單節點，3 個 topic |
+| 流處理平台 | Redpanda (Docker) | 單節點，2 個 topic |
 | 流處理框架 | Quix Streams (Python) | 兩個 processor |
-| Prompt Store | Redpanda compacted topic | 不需額外 infra |
+| Prompt Store | 本地檔案 (prompts/) | 零 infra，atomic rename 避免 race condition |
+| 套件管理 | uv + pyproject.toml | `uv add` 安裝套件，`uv run` 執行腳本 |
 
 ---
 
@@ -62,18 +103,17 @@ Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，fl
 
 **Topics:**
 
-| Topic | Key | Compaction | 用途 |
-|-------|-----|------------|------|
-| `app-log` | UUID | 不壓縮 | LLM app 的每次呼叫紀錄 |
-| `feedback` | UUID | 不壓縮 | evaluator 產生的評分 |
-| `prompt-store` | `"current"` | log compaction | 只保留最新 prompt |
+| Topic | Key | 用途 |
+|-------|-----|------|
+| `app-log` | UUID | LLM app 的每次呼叫紀錄 |
+| `feedback` | UUID | evaluator 產生的 critique |
 
 **app-log message schema:**
 ```json
 {
   "id": "uuid",
   "timestamp": "ISO8601",
-  "prompt_version": 1,
+  "prompt_version": "v1",
   "input": "客服對話原文...",
   "expected_output": { ... },
   "actual_output": { ... }
@@ -85,28 +125,20 @@ Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，fl
 {
   "id": "uuid",
   "log_id": "ref to app-log id",
-  "prompt_version": 1,
-  "score": 0.6,
-  "details": {
-    "format_correct": true,
-    "category_match": false,
-    "sentiment_match": true,
-    "summary_quality": 0.4
-  },
-  "source": "auto"
+  "prompt_version": "v1",
+  "prompt_text": "分析以下客服對話，輸出 JSON...",
+  "thumb": "up | down | null",
+  "user_comment": "category 分類完全錯了",
+  "critique": "prompt 未定義 category 的可選值，導致模型輸出自由格式類別而非標準分類；也未給 sentiment 範例，造成情緒標籤不一致。"
 }
 ```
 
-**prompt-store message schema:**
-```json
-{
-  "version": 2,
-  "prompt": "你是一個客服對話分析助手...",
-  "created_at": "ISO8601",
-  "trigger_feedback_ids": ["uuid1", "uuid2", ...],
-  "eval_gate_score": 0.85,
-  "parent_version": 1
-}
+**prompt store 檔案結構:**
+```
+prompts/
+├── v1.prompt.md   # 初始 prompt 純文字
+├── v2.prompt.md
+├── current.prompt.md  # atomic rename 更新，UI polling 此檔的 mtime
 ```
 
 ### 2. Gradio App
@@ -115,32 +147,27 @@ Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，fl
 - 顯示當前 prompt 版本與內容 (唯讀)
 - 輸入客服對話 → 呼叫 OpenAI → 顯示 JSON 輸出
 - 顯示 expected output 供比對
-- 提供 👍👎 人工 feedback (pub 到 feedback topic)
-- 版本歷史列表 (version, score, timestamp)
+- 提供 👍👎 人工 feedback，可附上可選文字說明 (pub 到 feedback topic)
+- 版本歷史列表 (version, timestamp)
 - Prompt diff 檢視 (v(n-1) → v(n))
 - 一鍵「Run All Test Cases」按鈕，批次跑 golden set
 
 **Prompt 讀取機制：**
-- 背景 thread 持續 consume prompt-store topic
-- 本地快取最新版 prompt + 歷史版本
-- gr.Timer 每 2 秒檢查是否有新版，有就更新 UI
+- gr.Timer 每 2 秒檢查 `prompts/current.prompt.md` 的 mtime
+- 有變動就讀取新版，更新 UI
 
 ### 3. Quix Evaluator
 
 **輸入：** sub `app-log` topic
 **輸出：** pub 到 `feedback` topic
 
-**評分邏輯 (programmatic, 不用 LLM)：**
-```
-score = weighted average of:
-  - format_correct (0 or 1):    JSON 格式是否正確，欄位是否齊全    weight: 0.3
-  - category_match (0 or 1):    問題類型是否正確                    weight: 0.3
-  - sentiment_match (0 or 1):   情緒判斷是否正確                    weight: 0.2
-  - summary_quality (0-1):      摘要與 expected 的語意相似度         weight: 0.2
-                                (可用簡單的 embedding cosine sim)
-```
+**邏輯 (LLM-based)：**
 
-重點：evaluator 盡量用規則和 embedding，不用 LLM judge，避免 LLM 評 LLM 的問題。
+Evaluator 拿到 `prompt_text` + `input` + `expected` + `actual`（若為人工 feedback 則額外有 `user_comment`），呼叫 LLM 分析「這個 prompt 哪裡不夠清楚，導致輸出偏離 expected」，輸出純文字 critique。
+
+critique 應具體指出 prompt 的問題（例如：未限定 category 選項、未定義 sentiment 格式、缺乏輸出範例等），而非單純描述輸出結果的對錯。
+
+若 LLM 無法從資訊中判斷 prompt 有何具體問題，則不 pub feedback，直接跳過。
 
 ### 4. Quix Learner
 
@@ -148,41 +175,34 @@ score = weighted average of:
 **觸發條件：** 累積 5 條 feedback
 
 **流程：**
-1. 收集 5 條 feedback + 對應的 app-log (input/output/expected)
+1. 收集 5 條 feedback (含 critique 文字)
 2. 讀取當前 prompt (從本地快取)
 3. 組裝 meta-prompt 給 OpenAI：
 
 ```
-你是一個 prompt engineer。以下是當前 prompt 和它最近 5 次的表現。
-請分析失敗模式，產生改進後的 prompt。
+你是一個 prompt engineer。以下是當前 prompt 和它最近 5 次被觀察到的問題。
+請根據這些問題，產生改進後的 prompt。
 
 當前 prompt:
 {current_prompt}
 
-案例 1: (score: 0.4)
-  input: ...
-  expected: ...
-  actual: ...
-  問題: category_match 失敗, summary_quality 低
-
-...（案例 2-5）
+觀察到的問題：
+1. {critique_1}
+2. {critique_2}
+3. {critique_3}
+4. {critique_4}
+5. {critique_5}
 
 請輸出改進後的完整 prompt，只輸出 prompt 本身。
 ```
 
-4. 拿到 candidate prompt
-5. **Eval Gate:** 用 golden set (5 組固定 test cases) 跑 candidate prompt
-   - 每組算分，取平均
-   - 同時跑當前 prompt 作為 baseline (或用快取的歷史分數)
-   - candidate >= baseline → 通過
-   - candidate < baseline → 丟棄
-6. 通過 → pub 新 prompt 到 prompt-store topic
+4. 拿到 candidate prompt → 寫入 `prompts/v{n}.prompt.md`，atomic rename 覆蓋 `current.prompt.md`
 
 ---
 
 ## Golden Set (5 組)
 
-預先準備，hardcode 在 learner 中。範例：
+預先準備，存在 `golden_set.json`，供 Gradio「Run All Test Cases」批次展示用。範例：
 
 **Case 1: 簡單投訴**
 ```
@@ -257,20 +277,22 @@ Expected: {
 ```
 prompt-flywheel-poc/
 ├── docker-compose.yml          # Redpanda
-├── requirements.txt            # Python deps
+├── pyproject.toml              # uv 套件管理 (uv add / uv run)
 ├── golden_set.json             # 5 組 test cases
-├── initial_prompt.txt          # v1 prompt
+│
+├── prompts/                    # Prompt store (本地檔案)
+│   ├── v1.prompt.md            # 初始 prompt
+│   └── current.prompt.md       # 永遠指向最新版（atomic rename 更新）
 │
 ├── app/
-│   ├── gradio_app.py           # Gradio UI + OpenAI 呼叫
-│   └── prompt_manager.py       # 背景 consume prompt-store
+│   └── gradio_app.py           # Gradio UI + OpenAI 呼叫
 │
 ├── processors/
 │   ├── evaluator.py            # Quix: app-log → feedback
-│   └── learner.py              # Quix: feedback → prompt-store
+│   └── learner.py              # Quix: feedback → 寫入 prompts/
 │
 └── scripts/
-    └── setup_topics.sh         # 建立 Redpanda topics
+    └── setup_topics.sh         # 建立 Redpanda topics (app-log, feedback)
 ```
 
 ---
@@ -319,7 +341,7 @@ prompt-flywheel-poc/
 2. 在 Gradio 上用 golden set 跑一輪，展示初始分數偏低
 3. 等待飛輪：evaluator 產生 feedback → learner 觸發 → 新 prompt 產生
 4. Gradio UI 自動更新版本，展示 prompt diff
-5. 再跑一輪 golden set，展示分數提升
+5. 再跑一輪 golden set，展示輸出品質提升
 6. 重複 1-2 輪，展示持續改進
 7. 討論：production 中如何加入人工 feedback、動態 eval pool、A/B test
 
@@ -327,7 +349,7 @@ prompt-flywheel-poc/
 
 ## 風險與注意事項
 
-- **OpenAI rate limit:** POC 用 gpt-4o-mini 基本不會撞到，但 learner 跑 eval gate 時會連續呼叫多次，注意間隔
-- **飛輪不收斂:** candidate prompt 可能越改越差。eval gate 是最後防線，但如果 golden set 太少 (5 組)，可能有 overfit 風險。Demo 時注意觀察
+- **OpenAI rate limit:** POC 用 gpt-4o-mini 基本不會撞到，evaluator 每條 app-log 會呼叫一次 LLM，留意並發量
+- **飛輪不收斂:** 沒有 eval gate，candidate prompt 直接上線。若 critique 品質不佳，prompt 可能越改越差。Demo 時需人工觀察 diff 是否合理
 - **Learner 的 meta-prompt 本身很重要:** 這個 prompt 的品質直接影響飛輪效果，需要花時間調整
-- **Redpanda compacted topic 行為:** 確認 compaction 設定正確，否則 prompt-store 會保留所有歷史訊息 (其實也不是壞事，但要注意 consumer 行為)
+- **Prompt 檔案 race condition:** Learner 用 atomic rename (`prompts/current.prompt.md.tmp` → `current.prompt.md`) 避免 UI 讀到半寫的檔案

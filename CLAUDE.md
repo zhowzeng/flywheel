@@ -1,0 +1,2 @@
+- 永遠使用 uv add <package-name> 安裝套件
+- 永遠使用 uv run <script-name> 執行腳本
