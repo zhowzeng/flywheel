@@ -345,11 +345,4 @@ prompt-flywheel-poc/
 6. 重複 1-2 輪，展示持續改進
 7. 討論：production 中如何加入人工 feedback、動態 eval pool、A/B test
 
----
 
-## 風險與注意事項
-
-- **OpenAI rate limit:** POC 用 gpt-4o-mini 基本不會撞到，evaluator 每條 app-log 會呼叫一次 LLM，留意並發量
-- **飛輪不收斂:** 沒有 eval gate，candidate prompt 直接上線。若 critique 品質不佳，prompt 可能越改越差。Demo 時需人工觀察 diff 是否合理
-- **Learner 的 meta-prompt 本身很重要:** 這個 prompt 的品質直接影響飛輪效果，需要花時間調整
-- **Prompt 檔案 race condition:** Learner 用 atomic rename (`prompts/current.prompt.md.tmp` → `current.prompt.md`) 避免 UI 讀到半寫的檔案

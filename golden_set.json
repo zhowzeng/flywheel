@@ -1,0 +1,57 @@
+[
+  {
+    "id": "case-1",
+    "description": "簡單投訴",
+    "input": "我三天前下的單到現在還沒收到，訂單編號 A12345，你們到底在搞什麼？",
+    "expected_output": {
+      "category": "物流問題",
+      "sentiment": "憤怒",
+      "summary": "客戶反映訂單 A12345 已下單三天未到貨",
+      "suggested_action": "查詢物流狀態並回覆客戶"
+    }
+  },
+  {
+    "id": "case-2",
+    "description": "退款請求",
+    "input": "你好，我想退掉上週買的藍牙耳機，還沒拆封，可以全額退款嗎？",
+    "expected_output": {
+      "category": "退款申請",
+      "sentiment": "中性",
+      "summary": "客戶要求退還未拆封的藍牙耳機並請求全額退款",
+      "suggested_action": "確認退貨政策並引導退貨流程"
+    }
+  },
+  {
+    "id": "case-3",
+    "description": "產品諮詢",
+    "input": "請問你們的年度會員跟月費會員差在哪裡？年度的有什麼額外優惠嗎？",
+    "expected_output": {
+      "category": "產品諮詢",
+      "sentiment": "中性",
+      "summary": "客戶詢問年度會員與月費會員的差異及優惠",
+      "suggested_action": "提供會員方案比較資訊"
+    }
+  },
+  {
+    "id": "case-4",
+    "description": "帳號問題 + 焦慮情緒",
+    "input": "我的帳號突然登不進去了，裡面還有儲值金耶！是不是被盜了？怎麼辦？",
+    "expected_output": {
+      "category": "帳號安全",
+      "sentiment": "焦慮",
+      "summary": "客戶無法登入帳號，擔心帳號被盜及儲值金安全",
+      "suggested_action": "協助帳號安全驗證並檢查異常登入紀錄"
+    }
+  },
+  {
+    "id": "case-5",
+    "description": "正面回饋",
+    "input": "上次客服小姐幫我處理得超快，想說來給你們一個好評！服務很棒！",
+    "expected_output": {
+      "category": "正面回饋",
+      "sentiment": "正面",
+      "summary": "客戶對上次客服體驗表示滿意並給予好評",
+      "suggested_action": "記錄正面回饋並轉達相關客服人員"
+    }
+  }
+]
