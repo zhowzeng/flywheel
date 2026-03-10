@@ -315,11 +315,11 @@ flywheel/
 7. ✅ 加上從 prompt-store 讀取 prompt
 8. ✅ 加上版本顯示、歷史、diff
 
-### Phase 3: Evaluator (Day 2)
+### Phase 3: Evaluator (Day 2) ✅ DONE
 
-9. 寫 evaluator.py：sub app-log → 算分 → pub feedback
-10. 先用簡單規則 (JSON 格式 + 欄位比對)
-11. 可選：加 embedding similarity 做 summary_quality
+9. ✅ 寫 evaluator.py：sub app-log → 算分 → pub feedback
+10. ✅ 先用簡單規則 (JSON 格式 + 欄位比對)
+11. ✅ 可選：加 embedding similarity 做 summary_quality
 
 ### Phase 4: Learner (Day 2-3)
 

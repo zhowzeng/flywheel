@@ -20,3 +20,6 @@ prompts/v[1-9][0-9]*.prompt.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude
+.claude/*.local.*
