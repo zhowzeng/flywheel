@@ -24,5 +24,8 @@ Thumbs.db
 # Claude
 .claude/*.local.*
 
+# VS Code
+.vscode/
+
 # temp
 tmp/
