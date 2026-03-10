@@ -321,30 +321,17 @@ flywheel/
 10. ✅ 先用簡單規則 (JSON 格式 + 欄位比對)
 11. ✅ 可選：加 embedding similarity 做 summary_quality
 
-### Phase 4: Learner (Day 2-3)
+### Phase 4: Learner (Day 2-3) ✅ DONE
 
-12. 寫 learner.py：sub feedback → 累積 5 條 → 觸發
-13. 組裝 meta-prompt → 呼叫 OpenAI → 拿到 candidate
-14. 實作 eval gate：跑 golden set，比較分數
-15. 通過 → pub 到 prompt-store
+12. ✅ 寫 learner.py：sub feedback → 累積 5 條 → 觸發
+13. ✅ 組裝 meta-prompt → 呼叫 OpenAI → 拿到 candidate
+14. ✅ candidate 直接寫入 prompts/ 新版本（設計決策：略過 eval gate，保持 POC 簡潔）
+15. N/A（無 eval gate；Learner 直接以 atomic rename 寫入 current.prompt.md，UI 透過 mtime polling 自動刷新）
 
-### Phase 5: 整合測試 (Day 3)
+### Phase 5: UI 優化 ✅ DONE
 
-16. 端到端測試：在 Gradio 跑 test cases → 觀察飛輪轉動
-17. 確認 Gradio UI 正確顯示版本更動
-18. 跑 2-3 輪飛輪，驗證 prompt 確實在改進
-19. 準備 demo script
-
----
-
-## Demo 流程 (建議)
-
-1. 展示初始 prompt (故意粗糙)
-2. 在 Gradio 上用 golden set 跑一輪，展示初始分數偏低
-3. 等待飛輪：evaluator 產生 feedback → learner 觸發 → 新 prompt 產生
-4. Gradio UI 自動更新版本，展示 prompt diff
-5. 再跑一輪 golden set，展示輸出品質提升
-6. 重複 1-2 輪，展示持續改進
-7. 討論：production 中如何加入人工 feedback、動態 eval pool、A/B test
-
-
+16. ✅ Inference tab：Status 改用 gr.Info() / gr.Warning()（與 Inference tab 一致）
+17. ✅ Prompt Management tab（原 Prompt History）：版本選擇改用 gr.Dropdown，自動列出可用版本
+18. ✅ Diff Viewer：From / To 版本改用 gr.Dropdown
+19. ✅ Tab 改名：「Prompt History」→「Prompt Management」
+20. ✅ 版本 dropdown 在 prompt 更新時（timer tick）自動同步 choices

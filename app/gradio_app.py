@@ -144,6 +144,10 @@ def _version_history_rows() -> list[list[str]]:
     return rows
 
 
+def _version_choices() -> list[int]:
+    return [v["version"] for v in list_versions()]
+
+
 def _diff_text(ver_a: int, ver_b: int) -> str:
     try:
         text_a = read_version(ver_a)
@@ -235,9 +239,10 @@ def on_submit_feedback(thumb: str, user_comment: str, state: dict) -> dict:
 def on_check_prompt_update(stored_mtime: float) -> tuple:
     """Called by gr.Timer every 2s. Returns updated values only if mtime changed.
 
-    Returns 4 fixed values + one value per golden-set case (for eval tables).
+    Returns 6 fixed values + one value per golden-set case (for eval tables).
+    Note: does NOT run eval computation to keep the timer response fast.
     """
-    _no_change = (gr.update(), gr.update(), stored_mtime, gr.update()) + tuple(
+    _no_change = (gr.update(), stored_mtime, gr.update(), gr.update(), gr.update(), gr.update()) + tuple(
         gr.update() for _ in golden_set
     )
     try:
@@ -246,12 +251,14 @@ def on_check_prompt_update(stored_mtime: float) -> tuple:
         return _no_change
     if current != stored_mtime:
         try:
-            _run_version_eval_compute()
+            choices = _version_choices()
             return (
-                _prompt_version_label(),
                 read_current(),
                 current,
                 _version_history_rows(),
+                gr.update(choices=choices),
+                gr.update(choices=choices),
+                gr.update(choices=choices),
                 *_build_case_dataframes(),
             )
         except OSError:
@@ -259,7 +266,7 @@ def on_check_prompt_update(stored_mtime: float) -> tuple:
     return _no_change
 
 
-def on_show_diff(ver_a: float, ver_b: float) -> str:
+def on_show_diff(ver_a: int, ver_b: int) -> str:
     return _diff_text(int(ver_a), int(ver_b))
 
 
@@ -363,12 +370,12 @@ def on_rerun_eval() -> list[pd.DataFrame]:
     return _build_case_dataframes()
 
 
-def on_set_current_version(version_num: float) -> str:
+def on_set_current_version(version_num: int) -> None:
     try:
         set_current_to_version(int(version_num))
-        return f"v{int(version_num)} is now current."
+        gr.Info(f"v{int(version_num)} is now current.")
     except Exception as exc:
-        return f"Error: {exc}"
+        gr.Warning(f"Error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -393,14 +400,6 @@ def build_ui() -> gr.Blocks:
             # Tab 1: Inference
             # ------------------------------------------------------------------
             with gr.Tab("Inference"):
-
-                with gr.Row():
-                    prompt_version_box = gr.Textbox(
-                        label="Current Prompt Version",
-                        value=_prompt_version_label(),
-                        interactive=False,
-                        scale=1,
-                    )
 
                 prompt_text_box = gr.Textbox(
                     label="Current Prompt",
@@ -452,9 +451,9 @@ def build_ui() -> gr.Blocks:
                         )
 
             # ------------------------------------------------------------------
-            # Tab 2: Prompt History
+            # Tab 2: Prompt Management
             # ------------------------------------------------------------------
-            with gr.Tab("Prompt History"):
+            with gr.Tab("Prompt Management"):
                 with gr.Row():
                     with gr.Column():
                         history_table = gr.Dataframe(
@@ -469,27 +468,30 @@ def build_ui() -> gr.Blocks:
                             outputs=[history_table],
                         )
                         gr.Markdown("### Set as Current")
-                        set_version_input = gr.Number(
-                            label="Version number", precision=0, value=1
+                        set_version_input = gr.Dropdown(
+                            label="Version",
+                            choices=_version_choices(),
+                            value=None,
                         )
                         set_current_btn = gr.Button("Set as Current", variant="primary")
-                        set_status_box = gr.Textbox(
-                            label="Status", interactive=False
-                        )
                         set_current_btn.click(
                             fn=on_set_current_version,
                             inputs=[set_version_input],
-                            outputs=[set_status_box],
+                            outputs=[],
                         )
 
                     with gr.Column():
                         gr.Markdown("### Diff Viewer")
                         with gr.Row():
-                            diff_from = gr.Number(
-                                label="From version", value=1, precision=0
+                            diff_from = gr.Dropdown(
+                                label="From version",
+                                choices=_version_choices(),
+                                value=None,
                             )
-                            diff_to = gr.Number(
-                                label="To version", value=2, precision=0
+                            diff_to = gr.Dropdown(
+                                label="To version",
+                                choices=_version_choices(),
+                                value=None,
                             )
                         diff_btn = gr.Button("Show Diff")
                         diff_output = gr.Code(label="Diff", language=None, lines=15)
@@ -555,7 +557,7 @@ def build_ui() -> gr.Blocks:
         timer.tick(
             fn=on_check_prompt_update,
             inputs=[mtime_state],
-            outputs=[prompt_version_box, prompt_text_box, mtime_state, history_table, *case_tables],
+            outputs=[prompt_text_box, mtime_state, history_table, set_version_input, diff_from, diff_to, *case_tables],
         )
 
     return demo
