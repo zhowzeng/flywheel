@@ -62,7 +62,7 @@ sequenceDiagram
     OAI-->>UI: 結構化 JSON 輸出
     UI->>AL: pub {input, expected, actual, prompt_version, prompt_text}
 
-    User->>UI: 👍👎 + 可選文字說明
+    User->>UI: 選擇 👍👎 + 可選文字說明，按 Submit Feedback
     UI->>AL: pub {log_id, thumb, user_comment}
 
     AL-->>EV: sub
@@ -147,7 +147,7 @@ prompts/
 - 顯示當前 prompt 版本與內容 (唯讀)
 - 輸入客服對話 → 呼叫 OpenAI → 顯示 JSON 輸出
 - 顯示 expected output 供比對
-- 提供 👍👎 人工 feedback，可附上可選文字說明 (pub 到 feedback topic)
+- 提供 👍👎 Radio 選擇 + 可選文字說明，按 Submit Feedback 一次送出 (pub 到 app-log topic)
 - 版本歷史列表 (version, timestamp)
 - Prompt diff 檢視 (v(n-1) → v(n))
 - 一鍵「Run All Test Cases」按鈕，批次跑 golden set
@@ -308,12 +308,12 @@ flywheel/
 3. ✅ 寫 `lib/prompt_manager.py`，讀寫 `prompts/` 目錄（read_current, save_new_version, list_versions, current_mtime）
 4. ✅ 寫 `golden_set.json`（5 組 test cases）
 
-### Phase 2: LLM App (Day 1-2)
+### Phase 2: LLM App (Day 1-2) ✅ DONE
 
-5. 寫 `gradio_app.py` 基本版：輸入 → OpenAI → 輸出
-6. 加上 pub to app-log
-7. 加上從 prompt-store 讀取 prompt
-8. 加上版本顯示、歷史、diff
+5. ✅ 寫 `gradio_app.py` 基本版：輸入 → OpenAI → 輸出
+6. ✅ 加上 pub to app-log（Run 時暫存 log_id，Submit Feedback 時帶 thumb + comment 一次送出）
+7. ✅ 加上從 prompt-store 讀取 prompt
+8. ✅ 加上版本顯示、歷史、diff
 
 ### Phase 3: Evaluator (Day 2)
 

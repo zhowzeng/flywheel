@@ -11,6 +11,7 @@ __pycache__/
 # Environment
 .env
 .env.*
+!.env.example
 
 # Prompts (generated versions, keep only v1 and current)
 prompts/v[2-9]*.prompt.md
