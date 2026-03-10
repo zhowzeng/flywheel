@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import gradio as gr
+import pandas as pd
 from confluent_kafka import Producer as KafkaProducer
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -34,6 +35,7 @@ from lib.prompt_manager import (
     list_versions,
     read_current,
     read_version,
+    set_current_to_version,
 )
 
 load_dotenv()
@@ -230,66 +232,143 @@ def on_submit_feedback(thumb: str, user_comment: str, state: dict) -> dict:
     return {**state, "log_id": None}
 
 
-def on_run_all_test_cases() -> list[list]:
-    """Batch run all golden set cases. Returns results table rows."""
-    version = current_version()
-    prompt_text = read_current()
-    rows = []
-    for case in golden_set:
-        try:
-            actual = call_llm(prompt_text, case["input"])
-            log_id = str(uuid.uuid4())
-            publish_app_log(
-                log_id=log_id,
-                prompt_version=version,
-                prompt_text=prompt_text,
-                input_text=case["input"],
-                expected_output=case["expected_output"],
-                actual_output=actual,
-            )
-            exp = case["expected_output"]
-            category_match = str(actual.get("category")) == str(exp.get("category"))
-            sentiment_match = str(actual.get("sentiment")) == str(exp.get("sentiment"))
-            result = "PASS" if (category_match and sentiment_match) else "FAIL"
-            rows.append(
-                [
-                    case["id"],
-                    case["description"],
-                    exp.get("category", ""),
-                    actual.get("category", ""),
-                    exp.get("sentiment", ""),
-                    actual.get("sentiment", ""),
-                    result,
-                ]
-            )
-        except Exception as exc:
-            rows.append(
-                [case["id"], case["description"], "", "", "", "", f"ERROR: {exc}"]
-            )
-    return rows
-
-
 def on_check_prompt_update(stored_mtime: float) -> tuple:
-    """Called by gr.Timer every 2s. Returns updated values only if mtime changed."""
+    """Called by gr.Timer every 2s. Returns updated values only if mtime changed.
+
+    Returns 4 fixed values + one value per golden-set case (for eval tables).
+    """
+    _no_change = (gr.update(), gr.update(), stored_mtime, gr.update()) + tuple(
+        gr.update() for _ in golden_set
+    )
     try:
         current = current_mtime()
     except OSError:
-        return gr.update(), gr.update(), stored_mtime, gr.update()
+        return _no_change
     if current != stored_mtime:
         try:
+            _run_version_eval_compute()
             return (
                 _prompt_version_label(),
                 read_current(),
                 current,
                 _version_history_rows(),
+                *_build_case_dataframes(),
             )
         except OSError:
-            return gr.update(), gr.update(), stored_mtime, gr.update()
-    return gr.update(), gr.update(), stored_mtime, gr.update()
+            return _no_change
+    return _no_change
 
 
 def on_show_diff(ver_a: float, ver_b: float) -> str:
     return _diff_text(int(ver_a), int(ver_b))
+
+
+# module-level cache: version_number -> {case_id -> result dict}
+# lives for the process lifetime; cleared on restart
+_eval_cache: dict[int, dict[str, dict]] = {}
+
+_EVAL_HEADERS = ["Version", "Category", "Sentiment", "Summary", "Action", "Score"]
+
+
+def _build_case_dataframes() -> list[pd.DataFrame]:
+    """Return one DataFrame per golden-set case.
+
+    Each DataFrame has rows = cached versions (sorted) and columns defined by
+    _EVAL_HEADERS. Returns empty DataFrames when the cache is empty.
+    """
+    sorted_versions = sorted(_eval_cache.keys())
+    dfs = []
+    for case in golden_set:
+        rows = []
+        for ver_num in sorted_versions:
+            result = _eval_cache[ver_num].get(case["id"], {})
+            rows.append({
+                "Version": f"v{ver_num}",
+                "Category": result.get("category", ""),
+                "Sentiment": result.get("sentiment", ""),
+                "Summary": result.get("summary", ""),
+                "Action": result.get("suggested_action", ""),
+                "Score": result.get("score", ""),
+            })
+        dfs.append(pd.DataFrame(rows, columns=_EVAL_HEADERS) if rows else pd.DataFrame(columns=_EVAL_HEADERS))
+    return dfs
+
+
+def _run_version_eval_compute() -> None:
+    """Run golden set against every prompt version, populating _eval_cache.
+
+    Cached versions are skipped on subsequent runs.
+    """
+    versions = list_versions()
+    for v in versions:
+        ver_num = v["version"]
+        if ver_num in _eval_cache:
+            continue
+        try:
+            prompt_text = read_version(ver_num)
+        except Exception:
+            _eval_cache[ver_num] = {
+                case["id"]: {
+                    "category": "ERROR", "sentiment": "ERROR",
+                    "summary": "ERROR", "suggested_action": "ERROR",
+                    "score": "0/2",
+                }
+                for case in golden_set
+            }
+            continue
+
+        ver_results: dict[str, dict] = {}
+        for case in golden_set:
+            exp = case["expected_output"]
+            try:
+                response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": prompt_text},
+                        {"role": "user", "content": case["input"]},
+                    ],
+                    response_format={"type": "json_object"},
+                )
+                actual = json.loads(response.choices[0].message.content or "{}")
+                actual_cat = actual.get("category", "")
+                actual_sent = actual.get("sentiment", "")
+                cat_ok = actual_cat == exp.get("category", "")
+                sent_ok = actual_sent == exp.get("sentiment", "")
+                ver_results[case["id"]] = {
+                    "category": actual_cat,
+                    "sentiment": actual_sent,
+                    "summary": actual.get("summary", ""),
+                    "suggested_action": actual.get("suggested_action", ""),
+                    "score": f"{(1 if cat_ok else 0) + (1 if sent_ok else 0)}/2",
+                }
+            except Exception:
+                ver_results[case["id"]] = {
+                    "category": "ERROR", "sentiment": "ERROR",
+                    "summary": "ERROR", "suggested_action": "ERROR",
+                    "score": "0/2",
+                }
+        _eval_cache[ver_num] = ver_results
+
+
+def on_run_version_eval() -> list[pd.DataFrame]:
+    """Run eval for uncached versions. Returns one DataFrame per golden-set case."""
+    _run_version_eval_compute()
+    return _build_case_dataframes()
+
+
+def on_rerun_eval() -> list[pd.DataFrame]:
+    """Clear eval cache and re-evaluate all versions."""
+    _eval_cache.clear()
+    _run_version_eval_compute()
+    return _build_case_dataframes()
+
+
+def on_set_current_version(version_num: float) -> str:
+    try:
+        set_current_to_version(int(version_num))
+        return f"v{int(version_num)} is now current."
+    except Exception as exc:
+        return f"Error: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -373,30 +452,7 @@ def build_ui() -> gr.Blocks:
                         )
 
             # ------------------------------------------------------------------
-            # Tab 2: Batch Test
-            # ------------------------------------------------------------------
-            with gr.Tab("Batch Test"):
-                run_all_btn = gr.Button("Run All Test Cases", variant="primary")
-                results_table = gr.Dataframe(
-                    headers=[
-                        "ID",
-                        "Description",
-                        "Expected Category",
-                        "Actual Category",
-                        "Expected Sentiment",
-                        "Actual Sentiment",
-                        "Result",
-                    ],
-                    label="Results",
-                )
-                run_all_btn.click(
-                    fn=on_run_all_test_cases,
-                    inputs=[],
-                    outputs=[results_table],
-                )
-
-            # ------------------------------------------------------------------
-            # Tab 3: Prompt History
+            # Tab 2: Prompt History
             # ------------------------------------------------------------------
             with gr.Tab("Prompt History"):
                 with gr.Row():
@@ -411,6 +467,19 @@ def build_ui() -> gr.Blocks:
                             fn=_version_history_rows,
                             inputs=[],
                             outputs=[history_table],
+                        )
+                        gr.Markdown("### Set as Current")
+                        set_version_input = gr.Number(
+                            label="Version number", precision=0, value=1
+                        )
+                        set_current_btn = gr.Button("Set as Current", variant="primary")
+                        set_status_box = gr.Textbox(
+                            label="Status", interactive=False
+                        )
+                        set_current_btn.click(
+                            fn=on_set_current_version,
+                            inputs=[set_version_input],
+                            outputs=[set_status_box],
                         )
 
                     with gr.Column():
@@ -429,6 +498,34 @@ def build_ui() -> gr.Blocks:
                             inputs=[diff_from, diff_to],
                             outputs=[diff_output],
                         )
+
+
+            # ------------------------------------------------------------------
+            # Tab 3: Golden Eval
+            # ------------------------------------------------------------------
+            with gr.Tab("Golden Eval"):
+                with gr.Row():
+                    run_eval_btn = gr.Button("Run (new versions only)", variant="primary")
+                    rerun_eval_btn = gr.Button("Rerun All Versions", variant="secondary")
+                case_tables: list[gr.Dataframe] = []
+                for case in golden_set:
+                    gr.Markdown(f"**{case['id']}**: {case['description']}")
+                    tbl = gr.Dataframe(
+                        headers=_EVAL_HEADERS,
+                        label=None,
+                        interactive=False,
+                    )
+                    case_tables.append(tbl)
+                run_eval_btn.click(
+                    fn=on_run_version_eval,
+                    inputs=[],
+                    outputs=case_tables,
+                )
+                rerun_eval_btn.click(
+                    fn=on_rerun_eval,
+                    inputs=[],
+                    outputs=case_tables,
+                )
 
         # ----------------------------------------------------------------------
         # Event wiring
@@ -458,7 +555,7 @@ def build_ui() -> gr.Blocks:
         timer.tick(
             fn=on_check_prompt_update,
             inputs=[mtime_state],
-            outputs=[prompt_version_box, prompt_text_box, mtime_state, history_table],
+            outputs=[prompt_version_box, prompt_text_box, mtime_state, history_table, *case_tables],
         )
 
     return demo

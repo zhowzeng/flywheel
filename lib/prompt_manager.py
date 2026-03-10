@@ -89,6 +89,22 @@ def save_new_version(prompt_text: str) -> int:
     return next_v
 
 
+def set_current_to_version(version: int) -> None:
+    """Atomically copy vN.prompt.md to current.prompt.md."""
+    src = PROMPTS_DIR / f"v{version}.prompt.md"
+    prompt_text = src.read_text(encoding="utf-8")
+    fd, tmp_path = tempfile.mkstemp(dir=PROMPTS_DIR, prefix=".current_", suffix=".tmp")
+    try:
+        os.write(fd, prompt_text.encode("utf-8"))
+        os.close(fd)
+        shutil.move(tmp_path, CURRENT_FILE)
+    except BaseException:
+        os.close(fd)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def current_mtime() -> float:
     """Return mtime of current.prompt.md (for polling)."""
     return os.path.getmtime(CURRENT_FILE)
