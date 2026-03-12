@@ -20,11 +20,18 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.tools import check_order, request_refund, transfer_to_human
+from app.tools import (
+    dispute_transaction,
+    freeze_card,
+    get_account_balance,
+    get_transaction_history,
+    report_fraud,
+    escalate_to_human,
+)
 from lib.kafka_callback import KafkaCallback
 from lib.langfuse_prompt import get_prompt
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ---------------------------------------------------------------------------
 # LiteLLM callback registration
@@ -37,16 +44,23 @@ litellm.callbacks = [kafka_cb]
 # Agent helpers
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "openai/gpt-4o-mini"
+MODEL_ID = "openai/gpt-4.1-mini"
 
 
 def _build_agent() -> Agent:
-    instructions = get_prompt(label="production")
+    instructions = get_prompt(label="production", cache_ttl_seconds=5)
     return Agent(
         name="CustomerServiceAgent",
         model=LitellmModel(model=MODEL_ID),
         instructions=instructions,
-        tools=[transfer_to_human, check_order, request_refund],
+        tools=[
+            escalate_to_human,
+            get_account_balance,
+            get_transaction_history,
+            freeze_card,
+            dispute_transaction,
+            report_fraud,
+        ],
     )
 
 
@@ -56,12 +70,12 @@ def _build_agent() -> Agent:
 
 def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Customer Service Agent") as demo:
-        gr.Markdown("# Customer Service Agent")
+        gr.Markdown("# 銀行客服 Agent")
         session_id_state = gr.State(value=lambda: str(uuid.uuid4()))
 
         with gr.Accordion("Current Prompt", open=False):
             prompt_display = gr.Textbox(
-                value=get_prompt(label="production"),
+                value=get_prompt(label="production", cache_ttl_seconds=5),
                 lines=10,
                 interactive=False,
                 show_label=False,
@@ -69,7 +83,7 @@ def build_ui() -> gr.Blocks:
             refresh_btn = gr.Button("Refresh Prompt", variant="secondary", size="sm")
 
         def refresh_prompt():
-            return get_prompt(label="production", cache_ttl_seconds=0)
+            return get_prompt(label="production", cache_ttl_seconds=5)
 
         refresh_btn.click(fn=refresh_prompt, inputs=[], outputs=[prompt_display])
 

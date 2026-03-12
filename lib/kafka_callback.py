@@ -44,7 +44,6 @@ class KafkaCallback(CustomLogger):
             "model": kwargs.get("model", ""),
             "messages": _serialisable_messages(kwargs.get("messages")),
             "response": _serialisable_response(response_obj),
-            "has_transfer": _check_transfer(response_obj),
             "start_time": start_time.isoformat() if start_time else None,
             "end_time": end_time.isoformat() if end_time else None,
         }
@@ -79,16 +78,3 @@ def _serialisable_response(response_obj) -> dict | str | None:
     if hasattr(response_obj, "model_dump"):
         return response_obj.model_dump()
     return str(response_obj)
-
-
-def _check_transfer(response_obj) -> bool:
-    """Return True if the response contains a transfer_to_human tool call."""
-    try:
-        for choice in response_obj.choices:
-            if choice.message.tool_calls:
-                for tc in choice.message.tool_calls:
-                    if tc.function.name == "transfer_to_human":
-                        return True
-    except (AttributeError, TypeError):
-        pass
-    return False
