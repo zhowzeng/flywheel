@@ -1,8 +1,7 @@
-"""Learner processor: feedback -> prompts/.
+"""Learner processor: feedback -> Langfuse prompt.
 
-Subscribes to the feedback Kafka topic. Accumulates critiques in a buffer; once
-WINDOW_SIZE critiques have been collected, generates a candidate prompt via LLM
-and saves it as a new version directly (no eval gate).
+從 feedback topic 消費 critique 訊息，累積到 WINDOW_SIZE 筆後，
+呼叫 LLM 根據這批問題產生改良版 system prompt，並儲存到 Langfuse 作為新版本。
 """
 
 from __future__ import annotations
@@ -15,9 +14,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from quixstreams import Application
 
-# Allow importing lib/ from the project root regardless of working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import lib.prompt_manager as prompt_manager
+
+from lib.langfuse_prompt import create_prompt, get_prompt
 
 load_dotenv()
 
@@ -27,20 +26,24 @@ load_dotenv()
 
 BROKER_ADDRESS = os.getenv("KAFKA_BROKER", "localhost:19092")
 FEEDBACK_TOPIC = "feedback"
-WINDOW_SIZE = 5
+WINDOW_SIZE = 5  # 累積此數量的 critique 後才觸發一次 prompt 更新
 
 LEARNER_SYSTEM_PROMPT = """\
-你是一位專業的 prompt engineer。你的任務是根據觀察到的問題，改進現有的 prompt。
+你是一位專業的 prompt 工程師，負責根據觀察到的對話問題改善客服 AI 的系統 prompt。
 
 規則：
-- 只輸出改進後的完整 prompt 本身，不要包含任何解釋、前綴或後綴
-- 保持 prompt 的核心目標不變（客服對話結構化分析，輸出 JSON）
-- 針對每一個觀察到的問題進行具體改進"""
+- 只輸出改良後的 prompt 本身，不要加任何說明、前綴或後綴。
+- 保留核心目標：一個能透過可用工具（check_order、request_refund、transfer_to_human）
+  協助客戶解決問題的客服聊天機器人。
+- 針對每個觀察到的問題提出具體改善（例如語氣指引、工具使用條件、升級規則、
+  同理心指示、語言風格）。
+- 保持 prompt 簡潔且可執行。"""
 
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
 
+# 暫存尚未達到 WINDOW_SIZE 的 critique 訊息
 _critique_buffer: list[dict] = []
 openai_client = OpenAI(timeout=30.0)
 
@@ -50,43 +53,53 @@ openai_client = OpenAI(timeout=30.0)
 
 
 def is_learnable(msg: dict) -> bool:
-    """Return True when the message has all required fields for learning."""
-    required = {"id", "prompt_version", "critique"}
+    """檢查訊息是否具備學習所需的欄位；不合格的訊息直接過濾掉。"""
+    required = {"id", "critique"}
     missing = required - msg.keys()
     if missing:
-        print(f"[learner] Dropping message missing fields: {missing}", flush=True)
+        print(f"[learner] 訊息缺少必要欄位 {missing}，略過", flush=True)
         return False
     if not msg.get("critique", "").strip():
-        print(f"[learner] Dropping message with empty critique id={msg.get('id')}", flush=True)
+        print(f"[learner] 訊息 id={msg.get('id')} 的 critique 為空，略過", flush=True)
         return False
+    print(f"[learner] 訊息 id={msg.get('id')} 通過驗證，加入緩衝區", flush=True)
     return True
 
 
 def accumulate(msg: dict) -> list[dict] | None:
-    """Buffer critiques; return a batch of WINDOW_SIZE when ready."""
+    """將 critique 加入緩衝區；累積到 WINDOW_SIZE 筆時回傳該批次，否則回傳 None。"""
     _critique_buffer.append(msg)
-    if len(_critique_buffer) >= WINDOW_SIZE:
+    current = len(_critique_buffer)
+    if current >= WINDOW_SIZE:
         batch = _critique_buffer[:WINDOW_SIZE]
         _critique_buffer.clear()
+        print(f"[learner] 已累積 {WINDOW_SIZE} 筆 critique，觸發 prompt 更新", flush=True)
         return batch
+    print(f"[learner] 緩衝區進度 {current}/{WINDOW_SIZE}，等待更多 critique", flush=True)
     return None
 
 
 def generate_candidate(critiques: list[dict]) -> str | None:
-    """Ask the LLM to produce an improved prompt based on observed critiques."""
-    current_prompt = prompt_manager.read_current()
+    """根據一批 critique 及目前的 production prompt，讓 LLM 產生改良版 prompt。"""
+    # 從 Langfuse 取得目前線上版本的 prompt 作為改寫基礎
+    print("[learner] 從 Langfuse 取得目前 production prompt...", flush=True)
+    current_prompt = get_prompt(label="production")
+    print(f"[learner] 目前 prompt 長度：{len(current_prompt)} 字元", flush=True)
 
     numbered = "\n".join(
         f"{i + 1}. {c['critique']}" for i, c in enumerate(critiques)
     )
 
     user_content = (
-        f"## 當前 Prompt\n\n{current_prompt}\n\n"
-        f"## 觀察到的問題（共 {len(critiques)} 條）\n\n{numbered}\n\n"
-        "## 任務\n\n請根據以上問題，輸出改進後的完整 prompt。只輸出 prompt 本身。"
+        f"## Current Prompt\n\n{current_prompt}\n\n"
+        f"## Observed Issues ({len(critiques)} items)\n\n{numbered}\n\n"
+        "## Task\n\n"
+        "Based on the issues above, output the improved prompt. "
+        "Output only the prompt itself."
     )
 
     try:
+        print(f"[learner] 呼叫 LLM 根據 {len(critiques)} 筆 critique 產生新版 prompt...", flush=True)
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -94,22 +107,30 @@ def generate_candidate(critiques: list[dict]) -> str | None:
                 {"role": "user", "content": user_content},
             ],
         )
-        return (response.choices[0].message.content or "").strip() or None
+        candidate = (response.choices[0].message.content or "").strip() or None
+        if candidate:
+            print(f"[learner] LLM 產生候選 prompt，長度：{len(candidate)} 字元", flush=True)
+        else:
+            print("[learner] LLM 回傳空內容", flush=True)
+        return candidate
     except Exception as exc:
-        print(f"[learner] generate_candidate failed: {exc}", flush=True)
+        print(f"[learner] 呼叫 LLM 失敗：{exc}", flush=True)
         return None
 
 
 def apply_candidate(critiques: list[dict]) -> None:
-    """Generate a candidate prompt and save it as a new version directly."""
+    """產生候選 prompt 並存入 Langfuse，同時套用 production 與 latest 標籤。"""
+    print(f"[learner] 開始處理批次，共 {len(critiques)} 筆 critique", flush=True)
     candidate = generate_candidate(critiques)
     if candidate is None:
+        print(f"[learner] 未能產生候選 prompt，批次 {len(critiques)} 筆 critique 已丟棄", flush=True)
         return None
     try:
-        new_ver = prompt_manager.save_new_version(candidate)
-        print(f"[learner] Saved new prompt version v{new_ver}", flush=True)
+        # create_prompt 會在 Langfuse 建立新版本並貼上指定標籤
+        new_ver = create_prompt(candidate, labels=["production", "latest"])
+        print(f"[learner] 新版 prompt v{new_ver} 已儲存到 Langfuse，標籤：production, latest", flush=True)
     except Exception as exc:
-        print(f"[learner] Failed to save new version: {exc}", flush=True)
+        print(f"[learner] 儲存新版本失敗：{exc}", flush=True)
     return None
 
 
@@ -127,11 +148,10 @@ if __name__ == "__main__":
     feedback_topic = app.topic(FEEDBACK_TOPIC, value_deserializer="json")
 
     sdf = app.dataframe(topic=feedback_topic)
-    sdf = sdf.filter(is_learnable)
-    sdf = sdf.apply(accumulate)
-    sdf = sdf.filter(lambda x: x is not None)
-    sdf = sdf.apply(apply_candidate)
-    sdf = sdf.filter(lambda x: x is not None)  # apply_candidate always returns None
+    sdf = sdf.filter(is_learnable)       # 過濾不合格訊息
+    sdf = sdf.apply(accumulate)          # 累積到 WINDOW_SIZE 才往下傳
+    sdf = sdf.filter(lambda x: x is not None)  # 未達批次大小時阻斷
+    sdf = sdf.apply(apply_candidate)     # 產生並儲存新版 prompt
 
     print(f"[learner] Starting. Broker={BROKER_ADDRESS}", flush=True)
     app.run()
