@@ -26,7 +26,7 @@ load_dotenv()
 
 BROKER_ADDRESS = os.getenv("KAFKA_BROKER", "localhost:19092")
 FEEDBACK_TOPIC = "feedback"
-WINDOW_SIZE = 5  # 累積此數量的 critique 後才觸發一次 prompt 更新
+WINDOW_SIZE = 3  # 累積此數量的 critique 後才觸發一次 prompt 更新
 
 LEARNER_SYSTEM_PROMPT = """\
 你是一位專業的 prompt 工程師，負責根據觀察到的對話問題改善客服 AI 的系統 prompt。

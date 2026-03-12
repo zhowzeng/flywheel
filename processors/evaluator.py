@@ -28,7 +28,7 @@ load_dotenv()
 BROKER_ADDRESS = os.getenv("KAFKA_BROKER", "localhost:19092")
 APP_LOG_TOPIC = "app-log"
 FEEDBACK_TOPIC = "feedback"
-SESSION_TIMEOUT_SECONDS = 30  # session 閒置超過此秒數即觸發評估
+SESSION_TIMEOUT_SECONDS = 15  # session 閒置超過此秒數即觸發評估
 
 EVALUATOR_SYSTEM_PROMPT = """\
 你是一位客服評估專家，負責審查客服 AI 與使用者之間的完整對話紀錄。
@@ -39,8 +39,9 @@ EVALUATOR_SYSTEM_PROMPT = """\
   - 是否有不當的回應或遺漏的重要資訊
   - 客服表現中哪些地方需要改進
 
-若客服 AI 的表現良好，使用者體驗滿意，請輸出：NO_CRITIQUE
-只輸出評語本身，不要加任何前綴或說明。"""
+- 若客服 AI 的表現良好，使用者體驗滿意，**請直接輸出：NO_CRITIQUE**，勿提出任何改進建議。
+- 只輸出評語本身，不要加任何前綴或說明。
+- 評語請具體並具有建設性，字數控制在 50 字以內。"""
 
 # ---------------------------------------------------------------------------
 # Clients
