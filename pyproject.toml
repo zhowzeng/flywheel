@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "gradio>=6.9.0",
+    "langfuse>=4.0.0",
+    "litellm>=1.82.1",
     "openai>=2.26.0",
     "python-dotenv>=1.2.2",
     "quixstreams>=3.23.4",
