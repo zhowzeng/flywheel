@@ -4,9 +4,7 @@
 
 驗證「LLM application 可以透過自動化流程持續改進自身 prompt」這個概念。
 
-~~Demo 場景：客服對話 → 結構化 JSON 擷取。初始 prompt 粗糙，flywheel 跑數輪後，prompt 自動演化，輸出品質可觀察地提升。~~
-
-Demo 場景（v2）：多輪對話客服 agent，具備 tool calling 能力（轉人工、查訂單、退款）。初始 prompt 故意粗糙，flywheel 透過 session-based evaluation 自動改進 agent 的對話品質。Prompt 版本控制由 Langfuse 管理，LLM 呼叫透過 LiteLLM callback 自動記錄到 Kafka。
+Demo 場景：多輪對話客服 agent，具備 tool calling 能力（轉人工、查訂單、退款）。初始 prompt 故意粗糙，flywheel 透過 session-based evaluation 自動改進 agent 的對話品質。Prompt 版本控制由 Langfuse 管理，LLM 呼叫透過 LiteLLM callback 自動記錄到 Kafka。
 
 ---
 
