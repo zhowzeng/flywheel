@@ -83,7 +83,7 @@ def generate_candidate(critiques: list[dict]) -> str | None:
     """根據一批 critique 及目前的 production prompt，讓 LLM 產生改良版 prompt。"""
     # 從 Langfuse 取得目前線上版本的 prompt 作為改寫基礎
     print("[learner] 從 Langfuse 取得目前 production prompt...", flush=True)
-    current_prompt = get_prompt(label="production")
+    current_prompt = get_prompt(label="production", cache_ttl_seconds=60)
     print(f"[learner] 目前 prompt 長度：{len(current_prompt)} 字元", flush=True)
 
     numbered = "\n".join(
@@ -101,7 +101,7 @@ def generate_candidate(critiques: list[dict]) -> str | None:
     try:
         print(f"[learner] 呼叫 LLM 根據 {len(critiques)} 筆 critique 產生新版 prompt...", flush=True)
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": LEARNER_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},

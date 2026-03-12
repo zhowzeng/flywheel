@@ -31,17 +31,15 @@ FEEDBACK_TOPIC = "feedback"
 SESSION_TIMEOUT_SECONDS = 30  # session 閒置超過此秒數即觸發評估
 
 EVALUATOR_SYSTEM_PROMPT = """\
-你是一位專業的 prompt 分析師，負責審查客服 AI 與使用者之間的完整對話紀錄。
-你的任務是找出 AI 系統 prompt 的缺陷，這些缺陷導致了不理想的回應行為。
+你是一位客服評估專家，負責審查客服 AI 與使用者之間的完整對話紀錄。
 
-請分析對話並指出具體的 prompt 問題，例如：
-  - prompt 未說明應使用的語氣或同理心表達方式
-  - prompt 缺乏何時使用可用工具的指引
-  - prompt 未定義轉接人工客服的條件
-  - prompt 沒有提供如何處理邊緣案例的範例
-  - prompt 未指定回應語言或格式要求
+請從使用者體驗的角度分析對話，指出：
+  - 客服 AI 的回應是否符合使用者的需求
+  - 溝通是否清晰、友善且有同理心
+  - 是否有不當的回應或遺漏的重要資訊
+  - 客服表現中哪些地方需要改進
 
-若你真的無法從對話中找出具體的 prompt 問題，請輸出：無法判斷
+若客服 AI 的表現良好，使用者體驗滿意，請輸出：NO_CRITIQUE
 只輸出評語本身，不要加任何前綴或說明。"""
 
 # ---------------------------------------------------------------------------
@@ -135,7 +133,7 @@ def _evaluate_session(session_id: str, messages: list[dict]) -> None:
     try:
         print(f"[evaluator] 呼叫 LLM 分析 session {session_id}...", flush=True)
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": EVALUATOR_SYSTEM_PROMPT},
                 {"role": "user", "content": session_text},
@@ -147,7 +145,7 @@ def _evaluate_session(session_id: str, messages: list[dict]) -> None:
 
     critique = (response.choices[0].message.content or "").strip()
     # LLM 回傳「無法判斷」表示對話內容不足以產生有意義的 critique，直接略過
-    if not critique or critique.startswith("無法判斷"):
+    if not critique or critique.startswith("NO_CRITIQUE"):
         print(f"[evaluator] Session {session_id} 無可採用的評語，略過", flush=True)
         return
 
@@ -179,17 +177,13 @@ def _evaluate_session(session_id: str, messages: list[dict]) -> None:
 
 
 def process_message(msg: dict) -> None:
-    """將訊息累積到對應的 session 緩衝區；同時檢查並清除已 timeout 的 session。"""
+    """將訊息累積到對應的 session 緩衝區。"""
     session_id = msg.get("session_id")
     if not session_id:
         print("[evaluator] 收到缺少 session_id 的訊息，略過", flush=True)
         return
 
     now = time.time()
-
-    # 每次收到新訊息時順便清除已 timeout 的其他 session
-    for sid, buf in _flush_timed_out_sessions():
-        _evaluate_session(sid, buf["messages"])
 
     # 將訊息加入對應 session 的緩衝區，並更新最後活躍時間
     is_new = session_id not in _sessions
