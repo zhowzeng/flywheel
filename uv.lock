@@ -686,6 +686,7 @@ dependencies = [
     { name = "openai-agents" },
     { name = "python-dotenv" },
     { name = "quixstreams" },
+    { name = "rich" },
 ]
 
 [package.metadata]
@@ -697,6 +698,7 @@ requires-dist = [
     { name = "openai-agents", specifier = ">=0.11.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "quixstreams", specifier = ">=3.23.4" },
+    { name = "rich", specifier = ">=14.3.3" },
 ]
 
 [[package]]

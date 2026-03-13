@@ -18,8 +18,38 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from quixstreams import Application
+from rich.console import Console
+from rich.markup import escape
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Rich console & session color helpers
+# ---------------------------------------------------------------------------
+
+_console = Console()
+
+# Rich standard color names used for session coloring
+_SESSION_COLORS = [
+    "red", "green", "yellow", "blue", "magenta", "cyan",
+    "bright_red", "bright_green", "bright_yellow", "bright_blue",
+    "bright_magenta", "bright_cyan",
+]
+
+
+def _session_color(session_id: str) -> str:
+    idx = hash(session_id) % len(_SESSION_COLORS)
+    return _SESSION_COLORS[idx]
+
+
+def _log(msg: str, session_id: str | None = None) -> None:
+    safe = escape(msg)
+    if session_id:
+        color = _session_color(session_id)
+        _console.print(f"[{color}]{safe}[/{color}]")
+    else:
+        _console.print(safe)
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -31,17 +61,19 @@ FEEDBACK_TOPIC = "feedback"
 SESSION_TIMEOUT_SECONDS = 15  # session 閒置超過此秒數即觸發評估
 
 EVALUATOR_SYSTEM_PROMPT = """\
-你是一位客服評估專家，負責審查客服 AI 與使用者之間的完整對話紀錄。
+你是客服品質檢查員。審查客服 AI 對話是否存在**明確的問題**。
 
-請從使用者體驗的角度分析對話，指出：
-  - 客服 AI 的回應是否符合使用者的需求
-  - 溝通是否清晰、友善且有同理心
-  - 是否有不當的回應或遺漏的重要資訊
-  - 客服表現中哪些地方需要改進
+只有在對話中發現以下情況時才輸出評語：
+- 客服 AI 的回應**未能解決**使用者的問題或需求
+- 存在**不準確、誤導或不適當**的內容
+- 溝通方式造成**明確的負面影響**
 
-- 若客服 AI 的表現良好，使用者體驗滿意，**請直接輸出：NO_CRITIQUE**，勿提出任何改進建議。
-- 只輸出評語本身，不要加任何前綴或說明。
-- 評語請具體並具有建設性，字數控制在 50 字以內。"""
+如果對話達成了使用者的目的、沒有明顯錯誤，即使不完美也應輸出 NO_CRITIQUE。
+
+**輸出規則：**
+1. 發現明確問題 → 輸出具體改進建議（50 字以內）
+2. 沒有明確問題 → 輸出：NO_CRITIQUE
+3. 只輸出評語或 NO_CRITIQUE，不要加其他文字"""
 
 # ---------------------------------------------------------------------------
 # Clients
@@ -79,7 +111,7 @@ def _flush_timed_out_sessions() -> list[tuple[str, dict]]:
         idle = now - _sessions[sid]["last_seen"]
         if idle > SESSION_TIMEOUT_SECONDS:
             msg_count = len(_sessions[sid]["messages"])
-            print(f"[evaluator] Session {sid} 已閒置 {idle:.1f}s，共 {msg_count} 則訊息，移入評估佇列", flush=True)
+            _log(f"[evaluator] Session {sid} 已閒置 {idle:.1f}s，共 {msg_count} 則訊息，移入評估佇列", sid)
             completed.append((sid, _sessions.pop(sid)))
     return completed
 
@@ -125,14 +157,14 @@ def _format_session(messages: list[dict]) -> str:
 def _evaluate_session(session_id: str, messages: list[dict]) -> None:
     """對一個完整 session 呼叫 LLM 取得 critique，並發布到 feedback topic。"""
     if not messages:
-        print(f"[evaluator] Session {session_id} 無訊息，跳過評估", flush=True)
+        _log(f"[evaluator] Session {session_id} 無訊息，跳過評估", session_id)
         return
 
-    print(f"[evaluator] 開始評估 session {session_id}，共 {len(messages)} 則訊息", flush=True)
+    _log(f"[evaluator] 開始評估 session {session_id}，共 {len(messages)} 則訊息", session_id)
     session_text = _format_session(messages)
 
     try:
-        print(f"[evaluator] 呼叫 LLM 分析 session {session_id}...", flush=True)
+        _log(f"[evaluator] 呼叫 LLM 分析 session {session_id}...", session_id)
         response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
@@ -141,17 +173,17 @@ def _evaluate_session(session_id: str, messages: list[dict]) -> None:
             ],
         )
     except Exception as exc:
-        print(f"[evaluator] LLM 呼叫失敗，session {session_id}：{exc}", flush=True)
+        _log(f"[evaluator] LLM 呼叫失敗，session {session_id}：{exc}", session_id)
         return
 
     critique = (response.choices[0].message.content or "").strip()
     # LLM 回傳「無法判斷」表示對話內容不足以產生有意義的 critique，直接略過
     if not critique or critique.startswith("NO_CRITIQUE"):
-        print(f"[evaluator] Session {session_id} 無可採用的評語，略過", flush=True)
+        _log(f"[evaluator] Session {session_id} 無可採用的評語，略過", session_id)
         return
 
     preview = critique[:80] + ("..." if len(critique) > 80 else "")
-    print(f"[evaluator] Session {session_id} 評語：{preview}", flush=True)
+    _log(f"[evaluator] Session {session_id} 評語：{preview}", session_id)
 
     feedback = {
         "id": str(uuid.uuid4()),
@@ -169,7 +201,7 @@ def _evaluate_session(session_id: str, messages: list[dict]) -> None:
     )
     # poll(0) 讓 librdkafka 處理已送出的訊息回調，避免內部佇列堆積
     producer.poll(0)
-    print(f"[evaluator] 已發布 feedback id={feedback['id']} 到 topic={FEEDBACK_TOPIC}", flush=True)
+    _log(f"[evaluator] 已發布 feedback id={feedback['id']} 到 topic={FEEDBACK_TOPIC}", session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +213,7 @@ def process_message(msg: dict) -> None:
     """將訊息累積到對應的 session 緩衝區。"""
     session_id = msg.get("session_id")
     if not session_id:
-        print("[evaluator] 收到缺少 session_id 的訊息，略過", flush=True)
+        _log("[evaluator] 收到缺少 session_id 的訊息，略過")
         return
 
     now = time.time()
@@ -190,11 +222,11 @@ def process_message(msg: dict) -> None:
     is_new = session_id not in _sessions
     if is_new:
         _sessions[session_id] = {"messages": [], "last_seen": now}
-        print(f"[evaluator] 新 session {session_id}，開始累積訊息", flush=True)
+        _log(f"[evaluator] 新 session {session_id}，開始累積訊息", session_id)
     _sessions[session_id]["messages"].append(msg)
     _sessions[session_id]["last_seen"] = now
     count = len(_sessions[session_id]["messages"])
-    print(f"[evaluator] Session {session_id} 累積第 {count} 則訊息", flush=True)
+    _log(f"[evaluator] Session {session_id} 累積第 {count} 則訊息", session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -230,5 +262,5 @@ if __name__ == "__main__":
     sdf = sdf.update(process_message)
 
     _start_timeout_flusher()
-    print(f"[evaluator] Starting (session-based). Broker={BROKER_ADDRESS}", flush=True)
+    _log(f"[evaluator] Starting (session-based). Broker={BROKER_ADDRESS}")
     app.run()

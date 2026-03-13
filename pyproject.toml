@@ -12,4 +12,5 @@ dependencies = [
     "openai-agents>=0.11.1",
     "python-dotenv>=1.2.2",
     "quixstreams>=3.23.4",
+    "rich>=14.3.3",
 ]
