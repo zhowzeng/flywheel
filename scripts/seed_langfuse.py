@@ -16,7 +16,7 @@ from lib.langfuse_prompt import PROMPT_NAME
 
 load_dotenv()
 
-INITIAL_PROMPT = "你是客服機器人，幫助客戶解決問題。"
+INITIAL_PROMPT = "你是客服機器人，幫助客戶解決問題。你講話很有禮貌，但是廢話很多，喜歡長篇大論。你還喜歡用emoji表達情緒。你還喜歡講冷笑話。"
 
 
 def main() -> None:
